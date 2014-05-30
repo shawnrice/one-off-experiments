@@ -1,0 +1,160 @@
+if ( $term->field_create_course_nodes['und'][0]['value']) {
+    $ds = array();
+
+    foreach ($term->field_days['und'] as $e) {
+        $ds[] = $e['value'];
+    }
+
+    $semester = $term->field_semester_reference['und'][0];
+
+
+
+    $start = date( 'm/d/Y' , strtotime( $semester['field_semester_duration']['und'][0]['value'] ) );
+    $end = date( 'm/d/Y' , strtotime( $semester['field_semester_duration']['und'][0]['value2'] ) );
+
+    $days = unserialize( $semester['field_academic_calendar']['und'][0]['value'] );
+
+    $cols = $days['rebuild']['count_cols'];
+    $rows = $days['rebuild']['count_rows'];
+
+    unset($days['import']);
+    unset($days['count_cols']);
+
+    $mod = array();
+
+    $week = array('sun' , 'mon' , 'tue' , 'wed' , 'thu' , 'fri' , 'sat');
+
+    $canceled = array();
+
+
+    for ( $i=0; $i < $rows; $i++ ) {
+        $m = $days["cell_$i"."_1"];
+        $d = date( 'm/d/Y' , strtotime( $days["cell_$i"."_0"] ) );
+
+        if ($days["cell_$i"."_4"] == "Yes") {
+            $canceled[] = $d;       // Class is canceled
+        }
+        if ( $days["cell_$i"."_6"] == "Yes" ) {
+            foreach ( $week as $v ) {
+                if ( preg_match( "/[" . $v . "]{3}/" , strtolower( $m ) ) ) {
+                    $mod[$days["cell_$i"."_0"]] = date( 'w' , strtotime( $v ) ); // Classes change schedule
+                    break;
+                }
+            }
+        }
+    }
+
+    $exceptions = array_keys( $mod );   // The dates of the exceptions
+    $start_date = date( 'm/d/Y' , strtotime( $start ) );  // Reformat the start date
+    $start = date( 'z' , strtotime( $start ) );     // Day of the year to start at
+    $end = date( 'z' , strtotime( $end ) );     // Day of the year to end on
+    $t = $end - $start;                     // How many days are in the semester
+    $dates = array();
+
+
+    foreach( range( 0 , $t ) as $day ) {
+        $date = date( 'm/d/Y' , strtotime( "{$start_date} + {$day} days" ) );
+        if ( in_array( date( 'w' , strtotime( $date ) ) , $ds ) ) {
+            $dates[] = $date;       
+        }
+    }
+
+
+    foreach ( $canceled as $c ) {
+            if ( ( $key = array_search( $c , $dates ) ) !== false ) {
+                unset( $dates[$key] );
+            }
+    }
+
+    foreach ( $mod as $k => $v ) {
+
+        if ( ( in_array( $v , $ds ) ) && ( ! in_array( $k , $dates ) ) ) {
+            array_push( $dates , $k );
+        }
+
+        if ( ( ! in_array( $v , $ds ) ) && (  in_array( $k , $dates ) ) ) {
+            if ( ( $key = array_search( $k , $dates ) ) !== false ) {
+                unset( $dates[$key] );
+            }
+        }
+    }
+
+
+
+    asort($dates);
+    $dates = array_values($dates);
+
+    $course_reference = $term->tid;
+    $professor = $term->field_professor['und'][0]['target_id'];
+    $added = 'Nodes NID ';
+
+
+    foreach ($dates as $k => $d) {
+
+                $node = new stdClass();
+                $node->type = 'class_day';
+                node_object_prepare($node);
+
+//                $title = $k + 1 . ' » ' . date('D, M d' , strtotime( $d )) . ' » ' . $term->field_department['und'][0]['value'] . ' ' . $term->field_course_number['und'][0]['value'] . ' § ' . $term->field_section_number['und'][0]['value'] . ' » ' . $term->field_course_name['und'][0]['value'];
+
+                $title = $k;
+
+                $node->title = $title;
+                $node->language = LANGUAGE_NONE;
+
+                $node->uid = $professor;
+
+                $node->status = 1;
+                $node->comment = 0;
+                $node->promote = 0;
+                $node->sticky = 0;
+
+
+                $node->field_professor['und'][0]['target_id'] = (int)$professor;
+
+/***
+ * Calculate Class Dates and Times
+ ***/
+                $month = date('m',strtotime( $d ));
+                $day = date('d',strtotime( $d ));
+                $year = date('Y',strtotime( $d ));
+
+                $hours = date('H',strtotime($term->field_class_start_time['und'][0]['value']));
+                $min = date('i',strtotime($term->field_class_start_time['und'][0]['value']));
+
+                $start = mktime($hours, $minutes, 0, $month, $day, $year);
+                $start = gmdate('Y-m-d H:i:s', $start);
+
+                $hours = date('H',strtotime($term->field_class_end_time['und'][0]['value']));
+                $min = date('i',strtotime($term->field_class_end_time['und'][0]['value']));
+
+                $end =  mktime($hours, $minutes, 0, $month, $day, $year);
+                $end = gmdate('Y-m-d H:i:s', $end)
+
+                $node->field_class_date['und'][0]['timezone'] = "America/New_York";
+                $node->field_class_date['und'][0]['timezone_db'] = "UTC";
+                $node->field_class_date['und'][0]['date_type'] = "datetime";
+                $node->field_class_date['und'][0]['value'] = $start;
+                $node->field_class_date['und'][0]['value2'] = $end;
+
+/***
+ * End dates and times
+ ***/
+
+                $node->field_course_reference['und'][0]['tid'] = (int)$course_reference;
+
+                $node->field_class_day['und'][0]['value'] = $k + 1;
+
+
+                node_save($node);
+                $added .= $node->nid . ', ';
+
+
+    }
+    $t = taxonomy_term_load($term->tid);
+    $t->field_create_course_nodes['und'][0]['value'] = 0;
+    taxonomy_term_save($t);
+    drupal_set_message('Class nodes built for ' . $term->field_course_name['und'][0]['value'] , 'status');
+} else {
+drupal_set_message('Class nodes for ' . $term->field_course_name['und'][0]['value'] . ' have already been built, so just the information has changed.', 'status');
+}
